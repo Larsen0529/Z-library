@@ -4,6 +4,16 @@ Instructions for AI coding agents working in this repository. Contribution
 rules and the mandatory pre-commit checks are in
 [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
+## Z-Library skills
+
+When a task requires one of these skills and Codex does not list it, read the
+linked `SKILL.md` before running its commands. Resolve any references relative
+to that skill's directory.
+
+- Z-Library search, saved books, and connectivity: [zlib](.agents/skills/zlib/SKILL.md)
+- Local e-book metadata: [metadata](.agents/skills/metadata/SKILL.md)
+- Kindle delivery: [kindle](.agents/skills/kindle/SKILL.md)
+
 ## Documentation privacy
 
 These rules apply to every file in the repository and to issue, PR and commit
