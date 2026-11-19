@@ -6,13 +6,39 @@ rules and the mandatory pre-commit checks are in
 
 ## Z-Library skills
 
-When a task requires one of these skills and Codex does not list it, read the
-linked `SKILL.md` before running its commands. Resolve any references relative
-to that skill's directory.
+Route natural-language requests to the appropriate skill below, whether or not
+Codex lists it. Read its `SKILL.md` before running commands. Resolve references
+relative to that skill's directory. Users do not need to name a skill or use a
+special invocation.
 
 - Z-Library search, saved books, and connectivity: [zlib](.agents/skills/zlib/SKILL.md)
 - Local e-book metadata: [metadata](.agents/skills/metadata/SKILL.md)
 - Kindle delivery: [kindle](.agents/skills/kindle/SKILL.md)
+
+### Cloud CLI invocation
+
+For this cloud checkout, replace the leading `zlib` in every skill command with
+the repository launcher. From the repository root use:
+
+```sh
+./scripts/zlib.sh version
+./scripts/zlib.sh meta --help
+./scripts/zlib.sh kindle send --help
+```
+
+From the parent workspace use `./Z-library/scripts/zlib.sh` instead. From any
+other directory use the launcher's absolute path, derived from this checkout.
+The launcher preserves the working directory, arguments and CLI exit status.
+It locates the persisted binary under the checkout's parent at
+`.zlib-tools/codex-install-home/.local/bin/zlib`; it does not search `PATH`,
+change `HOME`, or install or build anything. A missing or non-executable binary
+is an error: report it instead of following a skill's installation fallback.
+
+Use this route for all three skills. Native skill discovery and a bare `zlib`
+command on `PATH` are not prerequisites. Follow each skill's account, network,
+file-editing and delivery rules; invoking the launcher grants no additional
+authorization. For an offline availability check, use `version` and the relevant
+command's `--help`; these checks do not verify login, search or delivery.
 
 ## Documentation privacy
 
