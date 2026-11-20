@@ -40,6 +40,26 @@ file-editing and delivery rules; invoking the launcher grants no additional
 authorization. For an offline availability check, use `version` and the relevant
 command's `--help`; these checks do not verify login, search or delivery.
 
+### Cloud search and private Drive delivery
+
+For natural-language search or EPUB delivery requests in Codex Cloud, also read
+[the cloud workflow](docs/cloud-workflow.md) and use
+`node scripts/zlib-workflow.mjs` from this checkout. This is the Cloud account
+route instead of the skill's interactive-login recovery. It uses the existing
+launcher and Personal vault variables, an isolated writable temporary HOME,
+one verified domain, and automatic session cleanup. Do not install another CLI,
+persist credentials, or ask for passwords in chat.
+
+Search-only requests stop at results. Download only when explicitly requested
+and the user's rights are established; ask for a selection when the edition is
+ambiguous. Use the already connected Google Drive `upload_file` tool for private
+EPUB delivery, then read back metadata before reporting completion. Do not
+implement another Drive API, create public sharing, or configure Kindle or
+WeRead for this flow. Retain files after an uncertain or failed upload and use
+the recovery procedure before retrying. Never treat an unverified upload as
+delivery. All network commands need the platform's command-level network
+permission when required; an available domain alone proves no authentication.
+
 ## Documentation privacy
 
 These rules apply to every file in the repository and to issue, PR and commit
