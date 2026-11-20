@@ -50,6 +50,23 @@ launcher and Personal vault variables, an isolated writable temporary HOME,
 one verified domain, and automatic session cleanup. Do not install another CLI,
 persist credentials, or ask for passwords in chat.
 
+This executable entry checks Git before every invocation and starts the synced
+workflow in a fresh process. It stops on dirty worktrees, branches other than
+main or detached HEAD, non-fast-forward histories and inaccessible remotes.
+Request command-level network permission for every invocation, including status
+and completion. Never bypass the preflight by importing the internal core.
+Existing environment `start_skill` synchronization guidance is auxiliary; the
+entry enforces the check. A snapshot predating this entry needs a one-time
+environment baseline update; repository instructions cannot bootstrap absent code.
+
+Use `deliver` (or guarded `fetch`) with the connected Drive JSON-lines bridge
+described in the cloud workflow. Respond to connector requests using the existing
+Drive tools, not another API. The program exhausts available search pages and requires a
+complete destination listing on search misses or unknown search completeness, private metadata and EPUB byte
+readback before reuse. If the connector cannot prove listing completeness, stop;
+never mark a truncated or unknown listing complete. Direct `begin-upload` is
+disabled; upload authorization is issued only inside reconciled delivery.
+
 Search-only requests stop at results. Download only when explicitly requested
 and the user's rights are established; ask for a selection when the edition is
 ambiguous. Use the already connected Google Drive `upload_file` tool for private

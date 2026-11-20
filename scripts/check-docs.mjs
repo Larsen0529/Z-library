@@ -74,7 +74,10 @@ const username = (() => {
     return '';
   }
 })();
-if (username.length >= 3 && !placeholderUsers.has(username.toLowerCase())) {
+// Shared Cloud workers use the role name "agent". It is ordinary product
+// vocabulary, not a personal identifier. Keep home-path checks above intact
+// (in particular, do not add it to placeholderUsers).
+if (username.length >= 3 && username.toLowerCase() !== 'agent' && !placeholderUsers.has(username.toLowerCase())) {
   const pattern = new RegExp(`\\b${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
   rules.push({ name: 'local username', find: line => (pattern.test(line) ? [username] : []) });
 }

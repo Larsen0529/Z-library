@@ -29,100 +29,132 @@ and `fetch` when required. Do not bypass a network denial.
 - Delivery uses EPUB. Other search formats remain supported, but this route
   does not convert or silently download them.
 
-## Search and obtain a selected file
+## Enforced Git preflight
+
+Every invocation of `node scripts/zlib-workflow.mjs`, including status and
+completion, checks the worktree, fetches `origin` main, verifies ancestry and
+fast-forwards only. Both main and detached HEAD are supported. Dirty tracked or
+untracked files, another branch, a local-only commit, divergence, inaccessible
+remote or a busy workflow stop execution. No reset, stash, rebase or push is
+performed. Git stderr is withheld because remote URLs may contain credentials.
+The fetched commit is the version verified at that instant; a remote can move
+again afterward. Git and workflow operations require the platform's command-level
+network permission. The code never requests an unsandboxed fallback itself.
+
+The entry holds a checkout lock through completion and starts a fresh Node
+process importing the updated core from disk. It does not import business code
+before synchronization. Internal core exports exist for offline tests and are
+not a Cloud execution entry. Do not invoke them to bypass synchronization.
+
+Environment `start_skill` guidance remains useful as an early check, but it is
+not evidence that a command ran. The executable enforces synchronization. A
+fixed checkout containing this entry can fast-forward from its pinned ancestor.
+A snapshot from before the entry existed cannot run missing code: update the
+Cloud environment baseline once to include this implementation and its existing
+CLI, vault bindings and Drive connection. Repository code cannot modify the
+platform's environment configuration or force the agent to select this entry.
+
+## Search and delivery entry
 
 ```sh
 node scripts/zlib-workflow.mjs search "query" --language English --ext epub
-node scripts/zlib-workflow.mjs fetch "query" --language English --book-id "id:hash" --rights-confirmed
+node scripts/zlib-workflow.mjs deliver "query" --language English --book-id "id:hash" --rights-confirmed
 ```
 
-Replace placeholders only with an actual query and a full ID from search.
-Before `fetch`, check `status` and search owned, non-trashed Drive files for
-the selected search result's deterministic `delivery_name` (the result also
-contains `delivery_id`). This check occurs **before another book download**.
-A verified existing private EPUB for that selection can be returned directly;
-report it as reused, not newly downloaded or uploaded. Check its metadata and
-raw EPUB contents against the requested work; if identity is uncertain, ask
-instead of silently fetching another copy. Remove any temporary Drive readback
-copy after inspection. Do not assume a missing local receipt means the file
-does not exist in Drive. If no matching delivery exists, proceed with fetch.
+Use a full ID returned by search and the same filters, count and page. Search
+only returns results. `deliver` drives deduplication, fetch, upload authorization
+and completion. `fetch` runs the same deduplication first and returns a retained
+artifact only when no existing delivery was found. Direct `begin-upload` is
+rejected. Keep stdin open for the host connector bridge during fetch/deliver.
 
-Pass the same filters, page and count to `fetch` that located the selection;
-it searches again and requires that ID in those results. Each invocation uses
-one private temporary HOME for doctor, one login, profile validation, search
-and (for `fetch`) download. The login selects a healthy domain returned by
-`doctor --json`, preferring the CLI's built-in default. An optional `--domain`
-must occur in that verified list. A rejected login is never retried across
-mirrors. The original user HOME and checkout configuration are not edited.
+Each network invocation uses an isolated private temporary HOME for doctor,
+one login on a verified healthy domain, profile and search/download. Profile
+and credentials are never printed. A rejected login is not retried on mirrors.
+No CLI installation, persisted credential, HOME change, Kindle configuration
+or WeRead login is performed. Downloads require explicit intent, established
+rights and a selected EPUB. Unknown editions stop for clarification.
 
-Only pass `--rights-confirmed` after establishing the user's download intent
-and rights. It records the agent's decision, not a technical license check.
-`fetch` passes `--no-embed` to retain the source EPUB bytes (the CLI's reported
-size precedes optional metadata edits). It validates CLI-reported size, path containment and
-basic EPUB ZIP structure. It returns `delivery_id`, `name`, `path`, `size`,
-`sha256`, `book` and `phase: "ready"`. It does not upload anything.
+## Existing Drive connector bridge
 
-Search defaults to EPUB; explicit search formats are accepted. Search may
-proceed with no download quota, while fetch stops when the known quota is zero.
-The profile is parsed privately and never printed. Success output includes
-no profile, session, raw response or signed download URL. Errors expose only
-controlled categories and the operation, including credential rejection,
-EAPI refusal, network/antibot failure, parsing and session-save failure.
+Read the Google Drive skill. The workflow cannot invoke host MCP tools directly
+from a shell. Instead it writes JSON-lines requests to stdout and waits for a
+matching JSON-line response on stdin. The agent services requests using only the
+already connected Google Drive tools. This is an RPC transport to those tools,
+not another Drive API, OAuth client or MCP server. With Codex `exec_command`,
+use `tty: true` for a persistent command session and service requests with
+`write_stdin` until final output; closing stdin stops the flow. CLI subprocesses
+still receive no TTY and use only non-interactive arguments. JSON responses contain
+only the minimal metadata/path projection, never secrets.
+Never send passwords, tokens, cookies, signed URLs or raw base64 over the bridge.
 
-## Upload with the existing Google Drive connection
+Request shape:
 
-Read the Google Drive skill. Discover the connected tool's current schema;
-the verified route is `google_drive.upload_file` (tool names can be prefixed
-by the host). Its `file_uri` is the absolute local EPUB path returned by fetch.
-Use `file_name: name`, `mime_type: "application/epub+zip"`, and omit
-`parent_folder_id` to upload to the current account's My Drive root. Never
-upload the containing directory, a HOME, manifests or a session file. Do not
-call a sharing tool. Never replace an existing user's file.
-
-Before uploading, search Drive for the exact generated filename in owned,
-non-trashed files. Read metadata for any match and reuse only an exact private
-file with the same name and size; verify its raw bytes against `sha256` before
-reusing it, since size alone is not content identity. Multiple matches require
-reconciliation, not another upload. Complete paginated searches before assuming
-that there are no matches. If the connector is unavailable, keep the file and
-report that connection as the missing requirement; never invent an endpoint.
-
-Immediately before a new upload, mark the attempt:
-
-```sh
-node scripts/zlib-workflow.mjs begin-upload --delivery "delivery-id"
+```json
+{"connector_request":true,"request_id":1,"operation":"search","arguments":{"name":"book--fixture.epub","folder":"root"}}
 ```
 
-Upload once through the connector. On a timeout, lost tool response or failure,
-leave the artifact in place. A second `begin-upload` refuses an uncertain
-attempt. Reconcile with Drive search and raw-byte verification before deciding
-on another upload; a definitive failure with no created file can be retried by
-the agent after reconciliation, without running another download. The workflow
-has no unattended upload retry loop.
+Response shape:
 
-After receiving the actual file ID, call `get_file_metadata` with that ID and
-fields `id,name,mimeType,size,webViewLink,shared,permissions(type,role)`.
-Normalize only those fields from the connector result: it can expose `title`
-and `url` instead of `name` and `webViewLink`. Require matching filename and
-byte size, `shared: false`, and exactly one `user` permission with role `owner`.
-If size or permissions are omitted, fetch them again; do not assume success.
-An owner-authenticated Drive URL is not a public sharing link.
-
-Feed a minimal JSON projection of the **actual metadata readback** on stdin:
-
-```sh
-node scripts/zlib-workflow.mjs complete --delivery "delivery-id" < "metadata-json-file"
+```json
+{"request_id":1,"result":{"files":[],"complete":true}}
 ```
 
-The metadata file belongs in temporary storage, not the repository. It contains
-only `id`, `name` (or `title`), `size`, `url` (or `webViewLink`), `shared` and
-`permissions` projected to `type` and `role`. No names, emails, cookies or tokens
-are needed. Do not manufacture this evidence. `complete` verifies the metadata,
-records a minimal receipt, then removes the EPUB. Only its `delivered` receipt
-establishes completion. Return the observed Drive URL, file name, byte size and
-file ID. The owner can save a copy using the Drive iPhone app and import it into
-WeRead independently. Do not claim the phone-side save or import was tested
-unless the user confirms it.
+Echo the actual request ID. Return `error` on a failed or unavailable connector.
+Never manufacture evidence. Operations map to existing host tools as follows:
+
+| Operation | Host action and normalized result |
+| --- | --- |
+| search | `google_drive.search`, exact name, owned and non-trashed, destination scoped; return `files`, opaque `next_page_token` and terminal `complete` |
+| list | Complete destination enumeration using `google_drive.list_folder` or a supported paginated folder listing; return `files`, opaque `next_page_token` and terminal `complete` |
+| metadata | `google_drive.get_file_metadata`, return actual id, name/title, MIME, size, URL, shared and permissions(type,role) |
+| readback | `google_drive.fetch` with raw file and no inline base64, then materialize its authenticated file reference; return only the local temporary EPUB `path` |
+| upload | `google_drive.upload_file`, with requested EPUB path/name/MIME and no parent for My Drive root; return actual file `id` |
+
+The program exhausts search pages, including empty pages carrying a cursor.
+A search miss or unproven search completeness triggers full folder enumeration before download and again
+before upload. Preserve provider-owned cursors unchanged. A terminal page must
+carry positive completeness evidence: `complete: true`. A partial response,
+unknown truncation, repeated cursor, failed page or unprovable completeness stops
+the workflow. Never infer completeness from an empty search.
+
+Some hosts expose `list_folder` with only `url` and `top_k`, without a page cursor
+or explicit truncation/completeness marker. Such a tool cannot guarantee a full
+listing for arbitrarily large folders. Do not silently use the document-only
+search surface as an EPUB listing: it may omit binary files. If the actual
+connector result cannot establish completeness, return `complete: false` and
+report the platform limitation; no download or upload is authorized. Increasing
+a limit alone is not proof of completeness. A paginated adapter is supported by
+the program and covered by tests, but cannot add missing provider capabilities.
+
+## Reuse, verification and uncertain uploads
+
+Before downloading, inspect status and reconcile Drive by deterministic filename.
+All matching candidates require exact name, EPUB MIME, positive size, a canonical
+Drive link, `shared: false` and exactly one user/owner permission. Read back raw
+bytes, check their actual size and EPUB structure, then inspect offline metadata
+through the existing CLI. Title, author and language must match; before a known
+byte hash exists, publisher must also match to avoid silently reusing another
+edition. Ambiguous identity stops without downloading another file. With a
+retained artifact/receipt, require the same SHA-256. Identical duplicates can be
+reused; conflicting duplicates stop. Temporary readback copies are removed even
+on verification failure. Search never downloads a book.
+
+A verified existing file is returned as `reused: true`, without a new book
+download or upload. With no existing delivery, fetch preserves source bytes with
+`--no-embed`, validates the size/path/EPUB and retains a private artifact outside
+the checkout. The program reconciles again using its exact SHA-256 immediately
+before marking the durable state `uploading`. It then requests upload once,
+reads actual private metadata back and records completion before deleting the
+local artifact. Never call a sharing tool or replace an existing user's file.
+
+A lost upload response leaves `uploading` intact. The next delivery invocation
+reconciles Drive first: an exact private byte match completes the receipt;
+absence still reports `upload_outcome_uncertain`, rather than retrying. Changed
+artifacts and uncertain downloads also stop. Preserve recoverable files. A prior
+receipt is reverified against Drive rather than trusted as continuing access.
+The host agent must finish metadata/readback requests; repository code alone
+cannot guarantee execution of host tools or atomic uniqueness across concurrent
+independent Cloud machines.
 
 ## Recovery and security limits
 

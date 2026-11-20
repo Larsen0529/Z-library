@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createWorkflow, validateEpub } from './zlib-workflow.mjs';
+import { createWorkflow, validateEpub } from './zlib-workflow-core.mjs';
 
 // Minimal archive with local headers and a central directory, no extraction.
 function epub() {
@@ -179,7 +179,7 @@ test('dead-process authentication is removed and live lock is respected', async 
 test('SIGTERM kills child, cleans HOME, leaves recoverable download state', { skip: process.platform === 'win32' }, async t => {
   const f = fixture(t, { hang: 'download' });
   const runner = path.join(f.root, 'runner.mjs');
-  fs.writeFileSync(runner, `import {createWorkflow} from ${JSON.stringify(new URL('./zlib-workflow.mjs', import.meta.url).href)};
+  fs.writeFileSync(runner, `import {createWorkflow} from ${JSON.stringify(new URL('./zlib-workflow-core.mjs', import.meta.url).href)};
 try { await createWorkflow(${JSON.stringify({ launcher: f.launcher, stateRoot: f.stateRoot, environment: f.environment })})(${JSON.stringify(fetchOptions)}); }
 catch(e) { (await import('node:fs')).writeSync(1,e.code); }
 `);
