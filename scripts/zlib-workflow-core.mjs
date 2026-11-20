@@ -210,6 +210,9 @@ export function createWorkflow({
           if (s.phase === 'uploading') fail('upload_outcome_uncertain');
           delete s.path;
           s.phase = 'uploading';
+          if (options.deduplication) s.deduplication = Object.fromEntries(
+            ['search_complete', 'folder_checked', 'folder_complete', 'absence_proven', 'duplicate_upload_risk']
+              .map(k => [k, options.deduplication[k] === true]));
           writeJSON(path.join(dir, 'state.json'), s);
           return describe(dir);
         }
@@ -224,7 +227,8 @@ export function createWorkflow({
         try { u = new URL(url); } catch { fail('invalid_drive_link'); }
         if (u.origin !== 'https://drive.google.com' || u.pathname !== `/file/d/${id}/view` || u.username || u.password || u.hash ||
             [...u.searchParams.keys()].some(k => k !== 'usp')) fail('invalid_drive_link');
-        const receipt = { delivery_id: s.delivery_id, phase: 'delivered', name: s.name, size: s.size, sha256: s.sha256, book: s.book, drive_id: id, url };
+        const receipt = { delivery_id: s.delivery_id, phase: 'delivered', name: s.name, size: s.size, sha256: s.sha256, book: s.book, drive_id: id, url,
+          ...(s.deduplication ? { deduplication: s.deduplication } : {}) };
         writeJSON(path.join(dir, 'state.json'), receipt);
         fs.unlinkSync(path.join(dir, s.name));
         return receipt;
@@ -283,6 +287,7 @@ export async function main(args = process.argv.slice(2)) {
       delivery: { type: 'string' }, domain: { type: 'string' }, language: { type: 'string' },
       ext: { type: 'string' }, count: { type: 'string' }, page: { type: 'string' },
       'from-year': { type: 'string' }, 'to-year': { type: 'string' },
+      'strict-drive-dedup': { type: 'boolean' },
     } });
     const [action, query, ...extra] = positionals;
     if (extra.length) fail('invalid_arguments');
@@ -290,7 +295,7 @@ export async function main(args = process.argv.slice(2)) {
     if (Number(values.count ?? 10) > 50) fail('invalid_arguments');
     const metadata = action === 'complete' ? JSON.parse(fs.readFileSync(0, 'utf8')) : undefined;
     const run = createWorkflow();
-    const options = { action, query, ...values, bookId: values['book-id'], rightsConfirmed: values['rights-confirmed'], fromYear: values['from-year'], toYear: values['to-year'], metadata };
+    const options = { action, query, ...values, bookId: values['book-id'], rightsConfirmed: values['rights-confirmed'], fromYear: values['from-year'], toYear: values['to-year'], strictDriveDedup: values['strict-drive-dedup'], metadata };
     // Upload authorization is only issued inside the reconciled delivery route.
     if (action === 'begin-upload') fail('use_deliver_for_upload');
     let result;

@@ -61,11 +61,15 @@ environment baseline update; repository instructions cannot bootstrap absent cod
 
 Use `deliver` (or guarded `fetch`) with the connected Drive JSON-lines bridge
 described in the cloud workflow. Respond to connector requests using the existing
-Drive tools, not another API. The program exhausts available search pages and requires a
-complete destination listing on search misses or unknown search completeness, private metadata and EPUB byte
-readback before reuse. If the connector cannot prove listing completeness, stop;
-never mark a truncated or unknown listing complete. Direct `begin-upload` is
-disabled; upload authorization is issued only inside reconciled delivery.
+Drive tools, not another API. The program exhausts available search pages and
+checks the destination listing on search misses or unknown coverage. Current Drive tools may omit EPUBs from
+search and provide only a bounded, unmarked folder list. Never invent a complete
+marker or interpret a miss as proof of absence. Verify and reuse any visible
+candidate even when discovery is incomplete. Default delivery permits one new
+upload after both checks while reporting unproven absence and residual duplicate
+risk; use `--strict-drive-dedup` when the user requires proof before any download.
+Query errors, conflicting candidates and uncertain uploads still stop.
+Direct `begin-upload` is disabled; upload authorization is issued only inside reconciled delivery.
 
 Search-only requests stop at results. Download only when explicitly requested
 and the user's rights are established; ask for a selection when the edition is

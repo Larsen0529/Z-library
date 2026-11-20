@@ -63,8 +63,9 @@ node scripts/zlib-workflow.mjs deliver "query" --language English --book-id "id:
 
 Use a full ID returned by search and the same filters, count and page. Search
 only returns results. `deliver` drives deduplication, fetch, upload authorization
-and completion. `fetch` runs the same deduplication first and returns a retained
-artifact only when no existing delivery was found. Direct `begin-upload` is
+and completion. `--strict-drive-dedup` requires proven discovery completeness
+before a new download or upload; the default is compatibility mode. `fetch` runs the same deduplication first and returns a retained
+artifact only when no existing delivery was observed (absence can remain unknown). Direct `begin-upload` is
 rejected. Keep stdin open for the host connector bridge during fetch/deliver.
 
 Each network invocation uses an isolated private temporary HOME for doctor,
@@ -96,35 +97,66 @@ Request shape:
 Response shape:
 
 ```json
-{"request_id":1,"result":{"files":[],"complete":true}}
+{"request_id":1,"result":{"files":[]}}
 ```
 
-Echo the actual request ID. Return `error` on a failed or unavailable connector.
+An omitted completeness marker remains unknown; this response does not prove
+absence. Echo the actual request ID. Return `error` on a failed or unavailable connector.
 Never manufacture evidence. Operations map to existing host tools as follows:
 
 | Operation | Host action and normalized result |
 | --- | --- |
-| search | `google_drive.search`, exact name, owned and non-trashed, destination scoped; return `files`, opaque `next_page_token` and terminal `complete` |
-| list | Complete destination enumeration using `google_drive.list_folder` or a supported paginated folder listing; return `files`, opaque `next_page_token` and terminal `complete` |
+| search | `google_drive.search` using the supplied `tool_arguments`; return the actual raw result or `files`/`results` and actual opaque cursor |
+| list | `google_drive.list_folder` using supplied `tool_arguments`; return actual `files` without adding a completeness marker |
 | metadata | `google_drive.get_file_metadata`, return actual id, name/title, MIME, size, URL, shared and permissions(type,role) |
 | readback | `google_drive.fetch` with raw file and no inline base64, then materialize its authenticated file reference; return only the local temporary EPUB `path` |
 | upload | `google_drive.upload_file`, with requested EPUB path/name/MIME and no parent for My Drive root; return actual file `id` |
 
-The program exhausts search pages, including empty pages carrying a cursor.
-A search miss or unproven search completeness triggers full folder enumeration before download and again
-before upload. Preserve provider-owned cursors unchanged. A terminal page must
-carry positive completeness evidence: `complete: true`. A partial response,
-unknown truncation, repeated cursor, failed page or unprovable completeness stops
-the workflow. Never infer completeness from an empty search.
+The bridge accepts actual connector envelopes (`structuredContent`) as well as
+minimal projections. Do not add `complete: true` to an unmarked result. Search
+requests include exact escaped filename, owner, non-trashed and parent-folder
+filters in `special_filter_query_str`, with no keyword `query` or `item_type`.
+Use any returned `next_page_token` unchanged as `page_token`, including across
+empty pages. Do not invent a token to force a different search mode.
 
-Some hosts expose `list_folder` with only `url` and `top_k`, without a page cursor
-or explicit truncation/completeness marker. Such a tool cannot guarantee a full
-listing for arbitrarily large folders. Do not silently use the document-only
-search surface as an EPUB listing: it may omit binary files. If the actual
-connector result cannot establish completeness, return `complete: false` and
-report the platform limitation; no download or upload is authorized. Increasing
-a limit alone is not proof of completeness. A paginated adapter is supported by
-the program and covered by tests, but cannot add missing provider capabilities.
+### Connector capability boundary
+
+The exposed `search` schema supports `page_token` and a raw Drive v3 `q` filter,
+including a parent-folder condition. Explicit `item_type` is restricted to
+image/document/folder; it has no all-files or EPUB value. A known binary EPUB
+can be absent from both untyped and document-mode searches, while folder filters
+work for supported text documents. Thus schema-level pagination is not proof of
+complete EPUB coverage. Do not label document-only results an all-files listing.
+
+The exposed `list_folder` accepts only `url` and `top_k`. It returns visible
+binary EPUBs but no page cursor or completeness marker. A short list, empty list
+or larger limit does not prove that all files were scanned. If a future connector
+returns real cursors, the workflow exhausts them; the current tool cannot.
+A known receipt file ID is fetched directly before discovery, with full private
+metadata, identity and byte verification. This avoids search omissions entirely
+for receipts that survive, without requiring another source login or a stable
+source search page. Receipts remain temporary and may not survive tasks.
+
+### Practical delivery policy
+
+Default compatibility mode searches first, checks the bounded destination
+listing on search misses or unknown search coverage, and verifies any candidates.
+A verified match is positive evidence and can be reused even on an incomplete
+listing; no transfer is necessary. If no match is observed, the workflow retains
+`absence_proven: false`, emits `drive_absence_unproven`, and allows one new
+rights-cleared download. It checks Drive again immediately before one upload.
+The output and durable upload receipt record discovery coverage and
+`duplicate_upload_risk`. This is a practical delivery policy, not proof of absence.
+It may create a duplicate when an existing file is hidden from both discovery
+methods. Independent concurrent tasks also have no atomic uniqueness guarantee.
+
+Use `--strict-drive-dedup` when avoiding every possible hidden duplicate matters
+more than delivery. It stops before a new download or upload when coverage is
+unknown. Both modes stop on connector/query errors, malformed pages, repeated
+cursors, candidate conflicts, identity/privacy mismatches and uncertain prior
+uploads. Compatibility mode does not turn an API failure into an empty page.
+No new MCP server, OAuth client, public link, Drive index file or extra folder
+is needed. Keep delivery in the private My Drive root through the existing tool.
 
 ## Reuse, verification and uncertain uploads
 
@@ -140,7 +172,7 @@ reused; conflicting duplicates stop. Temporary readback copies are removed even
 on verification failure. Search never downloads a book.
 
 A verified existing file is returned as `reused: true`, without a new book
-download or upload. With no existing delivery, fetch preserves source bytes with
+download or upload. When no matching delivery was observed and policy allows it, fetch preserves source bytes with
 `--no-embed`, validates the size/path/EPUB and retains a private artifact outside
 the checkout. The program reconciles again using its exact SHA-256 immediately
 before marking the durable state `uploading`. It then requests upload once,
@@ -165,10 +197,10 @@ node scripts/zlib-workflow.mjs status
 State lives in a private, per-user directory under the system temporary
 directory, outside the checkout. `status` reports retained artifacts and
 receipts. A repeated fetch of the same ID returns existing state, not another
-download. A delivered receipt returns the prior Drive link. Receipts are small,
+download. Delivery rechecks the prior receipt file ID before returning its Drive link. Receipts are small,
 noncredential records kept temporarily for deduplication; they are not pushed
-to Git. They do not survive every new Cloud task. Drive search provides the
-cross-task reconciliation step.
+to Git. They do not survive every new Cloud task. Drive search plus bounded folder inspection provide cross-task candidate
+discovery, with the limitations described above.
 
 Authentication HOMEs are removed on success, failure, timeout, SIGINT and
 SIGTERM. An uncatchable SIGKILL or machine loss cannot run cleanup; the next
@@ -189,8 +221,10 @@ administrator. File deletion does not guarantee secure erasure or control the
 platform's memory/snapshot retention. Never commit credentials, sessions,
 downloaded books or live account records. Do not store credentials in Drive.
 
-Offline checks run with `node --test scripts/zlib-workflow.test.mjs` and the
-repository's full mandatory checks. They use a fake CLI and do not prove live
+Offline checks run with `node --test scripts/*.test.mjs` and the repository's
+full mandatory checks. The public-entry delivery simulation exercises Git
+preflight, isolated login, source fetch, connector requests, private completion,
+reuse and lost-response recovery with local Git and fake accounts/EPUB bytes. They use a fake CLI and do not prove live
 authentication, download or Drive delivery. Live acceptance must separately
 exercise a rights-cleared EPUB through search, selection, download, upload,
 metadata verification and cleanup. A new-task acceptance prompt should request

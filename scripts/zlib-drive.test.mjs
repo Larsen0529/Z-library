@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { reconcileDrive, deliver } from './zlib-drive.mjs';
+import { reconcileDrive, deliver, normalizeDrivePage, searchArguments } from './zlib-drive.mjs';
 
 const bytes = Buffer.from('fixture EPUB bytes');
 const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -53,11 +53,14 @@ test('identical duplicates are reconciled; conflicting bytes and permissions sto
   await assert.rejects(reconcileDrive({ ...f, target, readMetadata: async () => ({ title: 'another work' }) }), { code: 'drive_book_identity_uncertain' });
   assert.ok(f.copies.every(p => !fs.existsSync(p)));
 });
-test('truncation, missing completeness and pagination loops fail closed', async t => {
-  for (const pages of [{ 'list:': { files: [] } }, { 'list:': { files: [], complete: false } },
-    { 'list:': { files: [], next_page_token: 'loop' }, 'list:loop': { files: [], next_page_token: 'loop' } }]) {
-    await assert.rejects(reconcileDrive({ ...fixture(t, pages), target }));
+test('missing folder completeness remains unknown; pagination loops fail', async t => {
+  for (const pages of [{ 'list:': { files: [] } }, { 'list:': { files: [], complete: false } }]) {
+    const r = await reconcileDrive({ ...fixture(t, pages), target });
+    assert.equal(r.phase, 'not_observed'); assert.equal(r.deduplication.absence_proven, false);
   }
+  await assert.rejects(reconcileDrive({ ...fixture(t, {
+    'list:': { files: [], next_page_token: 'loop' }, 'list:loop': { files: [], next_page_token: 'loop' },
+  }), target }), { code: 'drive_pagination_loop' });
 });
 test('existing file prevents download and upload, even without local receipt', async t => {
   const f = fixture(t, { 'list:': { files: [metadata()], complete: true } });
@@ -103,4 +106,74 @@ test('prior delivered receipts must be reverified', async t => {
   const f = fixture(t);
   const run = async o => o.action === 'status' ? { deliveries: [{ ...target, book, sha256, phase: 'delivered', delivery_id: 'fixture' }] } : { books: [book] };
   await assert.rejects(deliver({ ...f, run, options: { action: 'deliver', bookId: book.id } }), { code: 'drive_prior_delivery_missing' });
+});
+
+test('actual unmarked connector pages can reuse a visible existing EPUB', async t => {
+  const f = fixture(t, { 'search:': { results: [] }, 'list:': { files: [metadata()] } });
+  const calls = [];
+  const run = async o => { calls.push(o.action); if (o.action === 'status') return { deliveries: [] }; if (o.action === 'search') return { books: [book] }; throw new Error('duplicate transfer'); };
+  const r = await deliver({ ...f, run, options: { action: 'deliver', bookId: book.id } });
+  assert.equal(r.reused, true);
+  assert.equal(r.deduplication.folder_complete, false);
+  assert.deepEqual(calls, ['status', 'search']);
+});
+test('compatibility delivery uploads once without inventing absence or completeness', async t => {
+  const f = fixture(t, { 'search:': { results: [] }, 'list:': { files: [] } });
+  const actions = [], uploads = [];
+  const run = async o => {
+    actions.push(o.action);
+    if (o.action === 'status') return { deliveries: [] };
+    if (o.action === 'search') return { books: [book] };
+    if (o.action === 'fetch') return { ...target, size: bytes.length, sha256, delivery_id: 'fixture', path: 'fixture.epub', phase: 'ready' };
+    if (o.action === 'begin-upload') return {};
+    if (o.action === 'complete') return { phase: 'delivered', ...o.metadata };
+  };
+  const drive = async (op, args) => { if (op === 'upload') { uploads.push(args); return { id: 'new-file' }; } return f.drive(op, args); };
+  const r = await deliver({ ...f, drive, run, options: { action: 'deliver', bookId: book.id } });
+  assert.equal(r.phase, 'delivered'); assert.equal(uploads.length, 1);
+  assert.equal(r.deduplication.absence_proven, false);
+  assert.equal(r.deduplication.duplicate_upload_risk, true);
+  assert.equal(actions.filter(a => a === 'fetch').length, 1);
+});
+test('strict mode still blocks unproven absence before downloading', async t => {
+  const f = fixture(t, { 'search:': { results: [] }, 'list:': { files: [] } });
+  const run = async o => { if (o.action === 'status') return { deliveries: [] }; if (o.action === 'search') return { books: [book] }; throw new Error('must not download'); };
+  await assert.rejects(deliver({ ...f, run, options: { action: 'deliver', bookId: book.id, strictDriveDedup: true } }), { code: 'drive_listing_incomplete' });
+});
+test('raw connector normalization never invents complete coverage', () => {
+  assert.equal(normalizeDrivePage({ structuredContent: { results: [] } }).complete, false);
+  assert.equal(normalizeDrivePage({ files: [] }).complete, false);
+  assert.equal(normalizeDrivePage({ files: [], complete: true, truncated: true }).complete, false);
+  assert.equal(normalizeDrivePage({ files: [], complete: true }).complete, true);
+  assert.throws(() => normalizeDrivePage({ isError: true }), { code: 'drive_connector_failed' });
+  assert.throws(() => normalizeDrivePage({ files: [], next_page_token: 12 }), { code: 'drive_invalid_page' });
+});
+test('search arguments use exact escaped name and folder filters without document-only typing', () => {
+  const args = searchArguments({ name: "Reader's Book.epub", folder: 'fixture-folder', page_token: 'opaque-provider-cursor' });
+  assert.equal(args.item_type, undefined);
+  assert.equal(args.query, undefined);
+  assert.equal(args.page_token, 'opaque-provider-cursor');
+  assert.ok(args.special_filter_query_str.includes("'fixture-folder' in parents"));
+  assert.ok(args.special_filter_query_str.includes("name = 'Reader\\'s Book.epub'"));
+});
+test('a known receipt file ID bypasses discovery omissions but still checks bytes and privacy', async t => {
+  const f = fixture(t);
+  const run = async o => o.action === 'status' ? { deliveries: [{ ...target, book, sha256, phase: 'delivered', delivery_id: 'fixture', drive_id: 'fixture' }] } : { books: [book] };
+  assert.equal((await deliver({ ...f, run, options: { action: 'deliver', bookId: book.id } })).reused, true);
+  assert.deepEqual(f.calls.map(c => c.op), ['metadata', 'readback']);
+});
+test('unknown directory coverage never permits a retry of an uncertain upload', async t => {
+  const f = fixture(t, { 'search:': { results: [] }, 'list:': { files: [] } });
+  const run = async o => {
+    if (o.action === 'status') return { deliveries: [{ ...target, book, sha256, phase: 'uploading' }] };
+    if (o.action === 'search') return { books: [book] };
+    throw new Error('must not retry');
+  };
+  await assert.rejects(deliver({ ...f, run, options: { action: 'deliver', bookId: book.id } }), { code: 'upload_outcome_uncertain' });
+});
+test('connector errors stop before download, including in compatibility mode', async t => {
+  const f = fixture(t);
+  const drive = async (op, args) => op === 'list' ? { isError: true } : f.drive(op, args);
+  const run = async o => { if (o.action === 'status') return { deliveries: [] }; if (o.action === 'search') return { books: [book] }; throw new Error('must not download'); };
+  await assert.rejects(deliver({ ...f, drive, run, options: { action: 'deliver', bookId: book.id } }), { code: 'drive_connector_failed' });
 });
